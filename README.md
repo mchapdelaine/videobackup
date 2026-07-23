@@ -1,5 +1,7 @@
 # videobackup
 
+![CI](https://github.com/mchapdelaine/videobackup/actions/workflows/ci.yml/badge.svg)
+
 Unattended Linux tool that records RTSP camera footage, **GPG-encrypts** every clip, 
 uploads it to a remote location via `rclone`, and enforces a **storage cap** by 
 pruning the oldest files first.
@@ -161,9 +163,45 @@ a pure function, unit-tested in `tests/test_retention.py`.
 ## Development
 
 ```bash
-pip install -e '.[dev]'
+pip install -e '.[dev]'    # ruff, pytest, pre-commit
 pytest
 ```
+
+### Code style & linting
+
+[Ruff](https://docs.astral.sh/ruff/) handles both linting and formatting,
+configured under `[tool.ruff]` in `pyproject.toml` (rule sets: `E`, `F`, `I`,
+`UP`, `B`). Run manually:
+
+```bash
+ruff check .            # lint (add --fix to auto-fix)
+ruff format .           # format in place
+ruff format --check .   # verify formatting without writing
+```
+
+### Pre-commit hook
+
+A [pre-commit](https://pre-commit.com/) hook runs ruff lint + format on staged
+files at commit time. Enable it once per clone:
+
+```bash
+pre-commit install
+```
+
+Now every `git commit` runs the checks; if ruff reformats a file the commit
+aborts, so re-stage (`git add`) and commit again. Run against the whole repo
+manually:
+
+```bash
+pre-commit run --all-files
+```
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request,
+across Python 3.9 and 3.13: `ruff check`, `ruff format --check`, then `pytest`.
+The same checks pass locally means CI passes — status shows in the badge at the
+top of this README.
 
 ## Notes & limitations
 
