@@ -1,0 +1,22 @@
+[project]
+name = "videobackup"
+version = "0.1.0"
+description = "Encrypted Google Drive backup of UniFi Protect camera footage"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+videobackup = "videobackup.main:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["videobackup*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

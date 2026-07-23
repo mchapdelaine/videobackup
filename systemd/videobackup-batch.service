@@ -1,0 +1,12 @@
+[Unit]
+Description=videobackup - encrypt, upload, and prune one cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=videobackup
+WorkingDirectory=/opt/videobackup
+ExecStart=/opt/videobackup/.venv/bin/videobackup -c /etc/videobackup/config.yaml batch
+NoNewPrivileges=true
+PrivateTmp=true

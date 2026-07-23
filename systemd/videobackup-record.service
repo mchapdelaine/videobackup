@@ -1,0 +1,19 @@
+[Unit]
+Description=videobackup - record UniFi Protect cameras via RTSP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User/paths to your install.
+User=videobackup
+WorkingDirectory=/opt/videobackup
+ExecStart=/opt/videobackup/.venv/bin/videobackup -c /etc/videobackup/config.yaml record
+Restart=always
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

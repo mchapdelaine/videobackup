@@ -1,0 +1,59 @@
+# videobackup configuration
+# Copy to config.yaml and fill in your values.
+
+udm_host: 192.168.1.1
+
+# One entry per camera. Get the RTSP(S) URL from UniFi Protect or camera settings:
+#   On Unifi Protect: Protect > Camera > Settings > Advanced > RTSP  (enable a stream, copy URL)
+cameras:
+  - name: front_door
+    rtsp_url: rtsp://192.168.1.1:7447/aBcDeFgHiJkLmNoP
+  - name: driveway
+    rtsp_url: rtsp://192.168.1.1:7447/qRsTuVwXyZ012345
+  - name: backyard
+    rtsp_url: rtsp://192.168.1.1:7447/6789AbCdEfGhIjKl
+
+# Length of each recorded file, in seconds.
+segment_seconds: 300
+
+# GPG *public* key identity that files are encrypted to (email or key id/fingerprint).
+# Import the public key on this box:  gpg --import public.asc
+# Keep the PRIVATE key offline; you only need it to restore/decrypt.
+gpg_recipient: "you@example.com"
+
+# rclone remote name (created via `rclone config`) and destination folder on Drive.
+rclone_remote: "gdrive"
+drive_folder: "unifi-backup"
+
+# Storage cap on Google Drive. When exceeded, oldest files are deleted first.
+# 107374182400 = 100 GiB
+max_drive_bytes: 107374182400
+
+# Optional age cap in days (delete anything older). 0 disables age pruning.
+max_age_days: 30
+
+# Whether pruned files go to the Google Drive trash. false = delete
+# permanently (recommended: trash still counts against your quota). Set true
+# to keep deletions recoverable at the cost of quota.
+use_trash: false
+
+# Local working directory for in-flight segments (needs enough space for a
+# few minutes of footage across all cameras plus retry buffer).
+# IMPORTANT: use a real disk path, NOT /tmp -- /tmp is often tmpfs (RAM) and
+# is cleared on reboot; plaintext video would sit in RAM and fill it.
+local_spool: /var/lib/videobackup/spool
+
+# Uploads run continuously (files ship as soon as they're encrypted). This
+# value only controls how often the retention PRUNE runs, seconds -- pruning
+# lists the whole remote folder, so it shouldn't run too often.
+batch_interval_seconds: 300
+
+# How often the encrypt loop runs, seconds. Encryption is cheap and local, so
+# keep this small: it drains the raw spool quickly and minimizes how long
+# plaintext lives on disk. Independent of upload speed.
+encrypt_interval_seconds: 20
+
+# Parallel rclone transfers per upload cycle. Higher = more throughput to
+# Google Drive (helps most when many small files are queued), at the cost of
+# more concurrent connections. 4 is a good default; try 8 on a fast uplink.
+upload_transfers: 4
