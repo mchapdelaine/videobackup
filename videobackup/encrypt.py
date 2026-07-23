@@ -32,11 +32,17 @@ def encrypt_file(src: Path, dest: Path, recipient: str) -> None:
     """
     tmp = dest.with_suffix(dest.suffix + ".part")
     cmd = [
-        "gpg", "--batch", "--yes", "--no-tty",
-        "--trust-model", "always",  # recipient key is explicitly chosen by us
+        "gpg",
+        "--batch",
+        "--yes",
+        "--no-tty",
+        "--trust-model",
+        "always",  # recipient key is explicitly chosen by us
         "--encrypt",
-        "--recipient", recipient,
-        "--output", str(tmp),
+        "--recipient",
+        recipient,
+        "--output",
+        str(tmp),
         str(src),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)

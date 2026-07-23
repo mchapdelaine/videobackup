@@ -32,16 +32,26 @@ def _ffmpeg_cmd(camera: Camera, out_dir: Path, segment_seconds: int) -> list[str
         "ffmpeg",
         "-nostdin",
         "-hide_banner",
-        "-loglevel", "warning",
-        "-rtsp_transport", "tcp",
-        "-timeout", "10000000",  # microseconds; drop dead connections
-        "-i", camera.rtsp_url,
-        "-c", "copy",
-        "-f", "segment",
-        "-segment_time", str(segment_seconds),
-        "-segment_format", "mp4",
-        "-reset_timestamps", "1",
-        "-strftime", "1",
+        "-loglevel",
+        "warning",
+        "-rtsp_transport",
+        "tcp",
+        "-timeout",
+        "10000000",  # microseconds; drop dead connections
+        "-i",
+        camera.rtsp_url,
+        "-c",
+        "copy",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(segment_seconds),
+        "-segment_format",
+        "mp4",
+        "-reset_timestamps",
+        "1",
+        "-strftime",
+        "1",
         pattern,
     ]
 
@@ -86,7 +96,9 @@ class CameraRecorder:
             ran_for = time.monotonic() - started
             log.warning(
                 "ffmpeg for %s exited (rc=%s) after %.0fs; restarting",
-                self.camera.name, rc, ran_for,
+                self.camera.name,
+                rc,
+                ran_for,
             )
             # Reset backoff if the process ran healthily for a while.
             if ran_for > _BACKOFF_MAX:

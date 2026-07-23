@@ -32,7 +32,9 @@ def run_batch(config: Config) -> None:
     deleted = prune(config)
     log.info(
         "Batch done: encrypted=%d uploaded=%d pruned=%d",
-        encrypted, uploaded, deleted,
+        encrypted,
+        uploaded,
+        deleted,
     )
 
 

@@ -42,16 +42,23 @@ def upload_pending(config: Config) -> int:
         "move",
         str(config.spool_encrypted),
         config.remote_path,
-        "--include", "*.gpg",   # never touch in-progress "*.gpg.part"
-        "--transfers", transfers,
-        "--checkers", transfers,
-        "--no-traverse",        # adding a few files to a large remote: skip full listing
-        "--retries", "3",
-        "--drive-chunk-size", "64M",  # ignored by non-drive backends
+        "--include",
+        "*.gpg",  # never touch in-progress "*.gpg.part"
+        "--transfers",
+        transfers,
+        "--checkers",
+        transfers,
+        "--no-traverse",  # skip full remote listing
+        "--retries",
+        "3",
+        "--drive-chunk-size",
+        "64M",  # ignored by non-drive backends
     ]
     result = subprocess.run(["rclone", *args], capture_output=True, text=True)
     if result.returncode != 0:
-        log.error("rclone move failed (rc=%s): %s", result.returncode, result.stderr.strip())
+        log.error(
+            "rclone move failed (rc=%s): %s", result.returncode, result.stderr.strip()
+        )
 
     moved = len(before) - len(_ready_files(config.spool_encrypted))
     if moved > 0:

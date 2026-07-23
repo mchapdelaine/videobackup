@@ -42,7 +42,9 @@ def test_missing_file(tmp_path):
 
 def test_missing_required_key(tmp_path):
     with pytest.raises(ConfigError):
-        load_config(_write(tmp_path, VALID.replace("gpg_recipient: you@example.com", "")))
+        load_config(
+            _write(tmp_path, VALID.replace("gpg_recipient: you@example.com", ""))
+        )
 
 
 def test_empty_cameras(tmp_path):

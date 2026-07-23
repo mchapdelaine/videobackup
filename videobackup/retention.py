@@ -111,15 +111,15 @@ def prune(config: Config, reserve_bytes: int = 0) -> int:
     files = list_remote(config)
     now = datetime.now(timezone.utc)
     effective_cap = max(0, config.max_drive_bytes - max(0, reserve_bytes))
-    victims = select_for_deletion(
-        files, effective_cap, now, config.max_age_days
-    )
+    victims = select_for_deletion(files, effective_cap, now, config.max_age_days)
     if not victims:
         total = sum(f.size for f in files)
         log.info(
             "Retention OK: %d file(s), %.2f GiB (cap %.2f GiB, reserve %.2f GiB)",
-            len(files), total / 2**30,
-            config.max_drive_bytes / 2**30, reserve_bytes / 2**30,
+            len(files),
+            total / 2**30,
+            config.max_drive_bytes / 2**30,
+            reserve_bytes / 2**30,
         )
         return 0
 

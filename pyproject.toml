@@ -9,7 +9,7 @@ dependencies = ["PyYAML>=6.0"]
 videobackup = "videobackup.main:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "ruff>=0.8", "pre-commit>=3.0"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -20,3 +20,10 @@ include = ["videobackup*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]   # pycodestyle, pyflakes, isort
