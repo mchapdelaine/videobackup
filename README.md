@@ -31,6 +31,15 @@ sudo apt install ffmpeg gnupg rclone python3-venv    # Debian/Ubuntu
 
 ## Install
 
+With [uv](https://docs.astral.sh/uv/) (recommended — fast, uses the pinned
+`uv.lock`):
+
+```bash
+uv sync            # creates .venv from the lockfile
+```
+
+Or with plain pip:
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -162,10 +171,18 @@ a pure function, unit-tested in `tests/test_retention.py`.
 
 ## Development
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/); exact versions
+are pinned in `uv.lock` (committed). Set up the dev environment and run tests:
+
 ```bash
-pip install -e '.[dev]'    # ruff, pytest, pre-commit
-pytest
+uv sync --all-extras    # installs ruff, pytest, pre-commit into .venv
+uv run pytest
 ```
+
+`uv run <cmd>` executes inside the project env without activating it. Prefix the
+ruff/pytest/pre-commit commands below with `uv run` (or activate `.venv` first).
+To refresh the lockfile after changing dependencies in `pyproject.toml`, run
+`uv lock`. Plain `pip install -e '.[dev]'` still works if you prefer pip.
 
 ### Code style & linting
 
@@ -199,9 +216,9 @@ pre-commit run --all-files
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request,
-across Python 3.9 and 3.13: `ruff check`, `ruff format --check`, then `pytest`.
-The same checks pass locally means CI passes — status shows in the badge at the
-top of this README.
+across Python 3.9 and 3.13. It installs deps with uv (`uv sync`, cached) and
+runs `ruff check`, `ruff format --check`, then `pytest`. The same checks passing
+locally means CI passes — status shows in the badge at the top of this README.
 
 ## Notes & limitations
 
