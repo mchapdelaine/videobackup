@@ -38,7 +38,7 @@ def run_batch(config: Config) -> None:
     )
 
 
-def run_batch_loop(config: Config, stop: "threading.Event | None" = None) -> None:
+def run_batch_loop(config: Config, stop: threading.Event | None = None) -> None:
     """Repeat the batch cycle every ``batch_interval_seconds`` until signalled.
 
     If ``stop`` is None a fresh event is created and signal handlers installed
@@ -137,7 +137,7 @@ def run_all(config: Config) -> None:
     Recorder(config).run_forever(stop)  # blocks until stop is set
 
 
-def _install_stop_handler() -> "threading.Event":
+def _install_stop_handler() -> threading.Event:
     stop = threading.Event()
 
     def _handle(signum, _frame):

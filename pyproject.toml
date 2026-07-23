@@ -26,4 +26,4 @@ line-length = 88
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]   # pycodestyle, pyflakes, isort
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, isort, pyupgrade, bugbear
