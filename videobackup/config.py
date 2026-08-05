@@ -31,6 +31,7 @@ class Config:
     local_spool: Path
     segment_seconds: int = 300
     max_age_days: int = 0
+    min_free_bytes: int = 0
     batch_interval_seconds: int = 300
     encrypt_interval_seconds: int = 20
     upload_transfers: int = 4
@@ -108,6 +109,7 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         max_drive_bytes = int(_require(data, "max_drive_bytes"))
         segment_seconds = int(data.get("segment_seconds", 300))
         max_age_days = int(data.get("max_age_days", 0))
+        min_free_bytes = int(data.get("min_free_bytes", 0))
         batch_interval_seconds = int(data.get("batch_interval_seconds", 300))
         encrypt_interval_seconds = int(data.get("encrypt_interval_seconds", 20))
         upload_transfers = int(data.get("upload_transfers", 4))
@@ -120,6 +122,8 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         raise ConfigError("'segment_seconds' must be positive")
     if max_age_days < 0:
         raise ConfigError("'max_age_days' must be >= 0")
+    if min_free_bytes < 0:
+        raise ConfigError("'min_free_bytes' must be >= 0")
     if encrypt_interval_seconds <= 0:
         raise ConfigError("'encrypt_interval_seconds' must be positive")
     if upload_transfers <= 0:
@@ -137,6 +141,7 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         local_spool=Path(str(_require(data, "local_spool"))).expanduser(),
         segment_seconds=segment_seconds,
         max_age_days=max_age_days,
+        min_free_bytes=min_free_bytes,
         batch_interval_seconds=batch_interval_seconds,
         encrypt_interval_seconds=encrypt_interval_seconds,
         upload_transfers=upload_transfers,

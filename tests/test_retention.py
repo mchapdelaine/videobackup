@@ -1,6 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
-from videobackup.retention import RemoteFile, _parse_mod_time, select_for_deletion
+from videobackup.retention import (
+    RemoteFile,
+    _parse_mod_time,
+    effective_prune_cap,
+    select_for_deletion,
+)
+
+GiB = 2**30
 
 NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -68,3 +75,81 @@ def test_parse_mod_time_nanoseconds():
 def test_parse_mod_time_plain():
     dt = _parse_mod_time("2026-07-16T12:00:00Z")
     assert dt == NOW
+
+
+# -- effective_prune_cap (quota-aware budget) ----------------------------
+
+
+def test_cap_folder_only_when_quota_guard_off():
+    # min_free_bytes=0 -> account ignored, just max_drive_bytes - reserve.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=1 * GiB,
+        folder_total=5 * GiB,
+        account_free=100 * GiB,  # ignored
+        min_free_bytes=0,
+    )
+    assert cap == 4 * GiB
+
+
+def test_cap_folder_only_when_about_unavailable():
+    # about failed (None) -> degrade to folder cap even with guard on.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=0,
+        folder_total=5 * GiB,
+        account_free=None,
+        min_free_bytes=2 * GiB,
+    )
+    assert cap == 5 * GiB
+
+
+def test_cap_untightened_when_free_already_ample():
+    # Plenty free -> deficit <= 0, folder cap wins.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=0,
+        folder_total=5 * GiB,
+        account_free=10 * GiB,
+        min_free_bytes=2 * GiB,
+    )
+    assert cap == 5 * GiB
+
+
+def test_cap_tightened_to_keep_account_free():
+    # Folder 5 GiB, only 1 GiB free, want 2 GiB free after uploading 0.
+    # deficit = 2 - (1 - 0) = 1 GiB -> cap = min(5, 5-1) = 4 GiB.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=0,
+        folder_total=5 * GiB,
+        account_free=1 * GiB,
+        min_free_bytes=2 * GiB,
+    )
+    assert cap == 4 * GiB
+
+
+def test_cap_accounts_for_reserve_in_deficit():
+    # Uploading 1 GiB while wanting 2 GiB free, 2 GiB free now, folder 5 GiB.
+    # deficit = 2 - (2 - 1) = 1 GiB -> account_cap = 5-1 = 4 GiB.
+    # folder cap = 5 - 1(reserve) = 4 GiB. min(4,4)=4.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=1 * GiB,
+        folder_total=5 * GiB,
+        account_free=2 * GiB,
+        min_free_bytes=2 * GiB,
+    )
+    assert cap == 4 * GiB
+
+
+def test_cap_floors_at_zero_when_other_usage_dominates():
+    # Account so full that even emptying the folder can't reach min_free.
+    cap = effective_prune_cap(
+        max_drive_bytes=5 * GiB,
+        reserve_bytes=0,
+        folder_total=1 * GiB,
+        account_free=0,
+        min_free_bytes=4 * GiB,
+    )
+    assert cap == 0

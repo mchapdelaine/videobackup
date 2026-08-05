@@ -29,6 +29,15 @@ drive_folder: "unifi-backup"
 # 107374182400 = 100 GiB
 max_drive_bytes: 107374182400
 
+# Optional account-quota guard. max_drive_bytes caps only THIS folder, but the
+# Google account quota is shared with Gmail, Photos, other Drive files, and
+# trash. If those leave less headroom than max_drive_bytes assumes, uploads hit
+# "403 storageQuotaExceeded" even though this folder is under its cap. When
+# min_free_bytes > 0, prune also queries the account (rclone about) and deletes
+# oldest files until at least this many bytes stay free account-wide. 0 = off
+# (folder cap only). Example: 2147483648 = keep 2 GiB free.
+min_free_bytes: 0
+
 # Optional age cap in days (delete anything older). 0 disables age pruning.
 max_age_days: 30
 

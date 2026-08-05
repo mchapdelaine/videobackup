@@ -164,7 +164,8 @@ See `config.yaml.example`. Key fields:
 | `segment_seconds` | Length of each recorded file (default 300) |
 | `gpg_recipient` | Public key id/email footage is encrypted to |
 | `rclone_remote` / `drive_folder` | Google Drive destination |
-| `max_drive_bytes` | Storage cap; oldest files pruned when exceeded |
+| `max_drive_bytes` | Per-folder storage cap; oldest files pruned when exceeded |
+| `min_free_bytes` | Optional account-quota guard (0 = off). Prune keeps at least this many bytes free account-wide via `rclone about`, so shared quota (Gmail/Photos/other files/trash) can't cause `403 storageQuotaExceeded` |
 | `max_age_days` | Optional: also delete files older than this (0 = off) |
 | `use_trash` | `false` (default) deletes pruned files permanently; `true` sends them to Drive trash (still counts against quota) |
 | `local_spool` | Working dir for in-flight segments — use a real disk path, **not** `/tmp` (tmpfs/RAM) |
@@ -193,6 +194,17 @@ lands at/under the cap instead of overshooting it. Files older than
 permanent by default (`use_trash: false`) so it actually frees quota — the
 Drive trash otherwise still counts against your storage. The selection logic is
 a pure function, unit-tested in `tests/test_retention.py`.
+
+`max_drive_bytes` caps only the backup folder. Google's quota, though, is
+shared with Gmail, Photos, other Drive files, and trash — so a folder that is
+under its cap can still hit `403 storageQuotaExceeded` when the rest of the
+account fills up. Set `min_free_bytes` to guard against this: prune then also
+reads the real account free space (`rclone about`) and deletes oldest files
+until at least that many bytes stay free account-wide, taking the tighter of
+the two budgets. The budget math (`effective_prune_cap`) is likewise a pure,
+unit-tested function. If `rclone about` is unavailable it degrades to the
+folder cap rather than failing. (One-off cleanup of existing trash:
+`rclone cleanup <remote>:`.)
 
 ## Development
 

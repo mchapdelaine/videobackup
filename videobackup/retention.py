@@ -63,6 +63,35 @@ def select_for_deletion(
     return to_delete
 
 
+def effective_prune_cap(
+    max_drive_bytes: int,
+    reserve_bytes: int,
+    folder_total: int,
+    account_free: int | None,
+    min_free_bytes: int,
+) -> int:
+    """Byte budget the backup folder must be pruned to (pre-upload target).
+
+    Starts from the folder cap (``max_drive_bytes`` minus the bytes about to be
+    uploaded). If ``min_free_bytes`` is set and the account's free space is
+    known, tightens the budget so that after uploading ``reserve_bytes`` the
+    account still has at least ``min_free_bytes`` free — accounting for quota
+    shared with Gmail, Photos, other Drive files, and trash.
+
+    Pure (no rclone) so it can be unit-tested.
+    """
+    reserve = max(0, reserve_bytes)
+    cap = max(0, max_drive_bytes - reserve)
+    if min_free_bytes > 0 and account_free is not None:
+        # Deleting D bytes from the folder raises free by D; uploading reserve
+        # lowers it by reserve. Require account_free + D - reserve >= min_free,
+        # i.e. keep the folder at/under folder_total - deficit.
+        deficit = min_free_bytes - (account_free - reserve)
+        if deficit > 0:
+            cap = min(cap, max(0, folder_total - deficit))
+    return cap
+
+
 def _run_rclone(args: list[str]) -> subprocess.CompletedProcess[str]:
     if shutil.which("rclone") is None:
         raise RuntimeError("rclone is not installed or not on PATH")
@@ -100,6 +129,26 @@ def list_remote(config: Config) -> list[RemoteFile]:
     return files
 
 
+def remote_about(config: Config) -> int | None:
+    """Return the account's free bytes via ``rclone about``, or None.
+
+    Returns None (and logs a warning) if the command fails or the backend does
+    not report free space, so the quota check degrades to folder-cap-only
+    rather than breaking prune.
+    """
+    result = _run_rclone(["about", f"{config.rclone_remote}:", "--json"])
+    if result.returncode != 0:
+        log.warning(
+            "rclone about failed; skipping quota check: %s", result.stderr.strip()
+        )
+        return None
+    try:
+        return int(json.loads(result.stdout or "{}")["free"])
+    except (ValueError, KeyError) as exc:
+        log.warning("Could not read free space from rclone about: %s", exc)
+        return None
+
+
 def prune(config: Config, reserve_bytes: int = 0) -> int:
     """Delete remote files to honor the size/age caps. Returns count deleted.
 
@@ -110,16 +159,31 @@ def prune(config: Config, reserve_bytes: int = 0) -> int:
     """
     files = list_remote(config)
     now = datetime.now(timezone.utc)
-    effective_cap = max(0, config.max_drive_bytes - max(0, reserve_bytes))
+    folder_total = sum(f.size for f in files)
+    # Only consult the account when the quota guard is enabled (saves an rclone
+    # call otherwise). None => fall back to folder-cap-only.
+    account_free = remote_about(config) if config.min_free_bytes > 0 else None
+    effective_cap = effective_prune_cap(
+        config.max_drive_bytes,
+        reserve_bytes,
+        folder_total,
+        account_free,
+        config.min_free_bytes,
+    )
     victims = select_for_deletion(files, effective_cap, now, config.max_age_days)
     if not victims:
-        total = sum(f.size for f in files)
+        free_note = (
+            f", account free {account_free / 2**30:.2f} GiB"
+            if account_free is not None
+            else ""
+        )
         log.info(
-            "Retention OK: %d file(s), %.2f GiB (cap %.2f GiB, reserve %.2f GiB)",
+            "Retention OK: %d file(s), %.2f GiB (cap %.2f GiB, reserve %.2f GiB%s)",
             len(files),
-            total / 2**30,
+            folder_total / 2**30,
             config.max_drive_bytes / 2**30,
             reserve_bytes / 2**30,
+            free_note,
         )
         return 0
 
