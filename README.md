@@ -112,6 +112,31 @@ For a quick end-to-end test, `run` does everything in one process. For
 production, use the systemd units below (recorder as a long service, batch on
 a timer).
 
+## Decrypt & view a clip (GUI)
+
+`videobackup-view` is a standalone graphical tool to decrypt an encrypted clip
+and play it in an embedded [mpv](https://mpv.io/) window:
+
+```bash
+videobackup-view                    # opens a file picker
+videobackup-view front_door_20260716_120000.mp4.gpg   # preselect a clip
+```
+
+This is the **restore** side, so it needs your GPG **private** key — run it on
+your trusted, offline machine, **not** the recording box (which holds only the
+public key). If the key is passphrase-protected, gpg-agent prompts you.
+
+It requires the optional `gui` extra plus system `mpv`/libmpv:
+
+```bash
+sudo apt install mpv libmpv2        # Debian/Ubuntu
+uv sync --extra gui                 # or: pip install -e '.[gui]'
+```
+
+> Security note: playback needs a seekable file, so the clip is decrypted to a
+> temporary file (`0600` perms) that is deleted when you close the window or
+> open the next clip — a brief plaintext-on-disk window on a machine you trust.
+
 ## Run as a service (systemd)
 
 Copy the units in `systemd/` and adjust `User`, paths, and config location:

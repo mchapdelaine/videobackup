@@ -7,8 +7,10 @@ dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 videobackup = "videobackup.main:main"
+videobackup-view = "videobackup.viewer:main"
 
 [project.optional-dependencies]
+gui = ["python-mpv>=1.0"]
 dev = ["pytest>=7.0", "ruff>=0.8", "pre-commit>=3.0"]
 
 [build-system]
