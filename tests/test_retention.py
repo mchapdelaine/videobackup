@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
+from videobackup import retention
 from videobackup.retention import (
     RemoteFile,
+    _delete_remote,
     _parse_mod_time,
+    _rclone_delete_args,
     effective_prune_cap,
     select_for_deletion,
 )
@@ -153,3 +158,59 @@ def test_cap_floors_at_zero_when_other_usage_dominates():
         min_free_bytes=4 * GiB,
     )
     assert cap == 0
+
+
+# -- batched delete ------------------------------------------------------
+
+
+def test_delete_args_permanent_by_default():
+    args = _rclone_delete_args("gdrive:unifi-backup", "/tmp/list.txt", use_trash=False)
+    assert args[:2] == ["delete", "gdrive:unifi-backup"]
+    assert "--files-from" in args and "/tmp/list.txt" in args
+    assert "--drive-use-trash=false" in args
+
+
+def test_delete_args_trash_when_enabled():
+    args = _rclone_delete_args("gdrive:x", "/tmp/l", use_trash=True)
+    assert "--drive-use-trash=true" in args
+
+
+def _cfg():
+    return SimpleNamespace(remote_path="gdrive:unifi-backup", use_trash=False)
+
+
+def test_delete_remote_batches_all_names_in_one_call(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(args):
+        # Capture the files-from list contents before the temp file is removed.
+        path = args[args.index("--files-from") + 1]
+        seen["names"] = Path(path).read_text().split()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(retention, "_run_rclone", fake_run)
+    n = _delete_remote(_cfg(), ["a.gpg", "b.gpg", "c.gpg"])
+    assert n == 3  # one call, all counted
+    assert seen["names"] == ["a.gpg", "b.gpg", "c.gpg"]
+
+
+def test_delete_remote_returns_zero_on_failure(monkeypatch):
+    monkeypatch.setattr(
+        retention,
+        "_run_rclone",
+        lambda args: SimpleNamespace(returncode=1, stderr="boom", stdout=""),
+    )
+    assert _delete_remote(_cfg(), ["a.gpg"]) == 0
+
+
+def test_delete_remote_noop_on_empty(monkeypatch):
+    called = False
+
+    def fake_run(args):
+        nonlocal called
+        called = True
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(retention, "_run_rclone", fake_run)
+    assert _delete_remote(_cfg(), []) == 0
+    assert not called  # no rclone process for an empty victim list

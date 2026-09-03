@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .config import Config
+from .config import RAW_SEGMENT_PATTERNS, Config
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,10 @@ def encrypt_pending(config: Config) -> int:
 
     now = time.time()
     count = 0
-    for src in sorted(config.spool_raw.glob("*.mp4")):
+    segments = sorted(
+        p for pat in RAW_SEGMENT_PATTERNS for p in config.spool_raw.glob(pat)
+    )
+    for src in segments:
         if not _is_closed(src, now):
             continue
         dest = config.spool_encrypted / (src.name + ".gpg")

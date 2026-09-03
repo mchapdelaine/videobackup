@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -96,6 +98,52 @@ def _run_rclone(args: list[str]) -> subprocess.CompletedProcess[str]:
     if shutil.which("rclone") is None:
         raise RuntimeError("rclone is not installed or not on PATH")
     return subprocess.run(["rclone", *args], capture_output=True, text=True)
+
+
+def _rclone_delete_args(
+    remote_path: str, files_from: str, use_trash: bool
+) -> list[str]:
+    """Build the ``rclone delete`` argv for a batch of files (pure/testable).
+
+    ``--files-from`` lists names relative to ``remote_path`` (segments are flat
+    in the folder), so a single invocation deletes them all in parallel instead
+    of one subprocess per file. Trash is off by default: the Drive trash still
+    counts against the account quota.
+    """
+    return [
+        "delete",
+        remote_path,
+        "--files-from",
+        files_from,
+        f"--drive-use-trash={'true' if use_trash else 'false'}",
+    ]
+
+
+def _delete_remote(config: Config, names: list[str]) -> int:
+    """Delete ``names`` under the remote folder in one rclone call.
+
+    Returns the number deleted (all of them on success; 0 if the batch failed).
+    """
+    if not names:
+        return 0
+    fd, list_path = tempfile.mkstemp(prefix="videobackup-prune-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(names) + "\n")
+        result = _run_rclone(
+            _rclone_delete_args(config.remote_path, list_path, config.use_trash)
+        )
+    finally:
+        os.unlink(list_path)
+    if result.returncode != 0:
+        log.error(
+            "Batch prune of %d file(s) failed (rc=%s): %s",
+            len(names),
+            result.returncode,
+            result.stderr.strip(),
+        )
+        return 0
+    return len(names)
 
 
 def _parse_mod_time(value: str) -> datetime:
@@ -187,20 +235,7 @@ def prune(config: Config, reserve_bytes: int = 0) -> int:
         )
         return 0
 
-    deleted = 0
-    for f in victims:
-        # By default delete permanently: the Drive trash still counts against
-        # the account quota. Set use_trash: true to keep deletions recoverable.
-        result = _run_rclone(
-            [
-                "deletefile",
-                f"--drive-use-trash={'true' if config.use_trash else 'false'}",
-                f"{config.remote_path}/{f.name}",
-            ]
-        )
-        if result.returncode == 0:
-            deleted += 1
-            log.info("Pruned %s", f.name)
-        else:
-            log.error("Failed to prune %s: %s", f.name, result.stderr.strip())
+    deleted = _delete_remote(config, [f.name for f in victims])
+    if deleted:
+        log.info("Pruned %d file(s) from %s", deleted, config.remote_path)
     return deleted

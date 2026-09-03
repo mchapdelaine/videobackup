@@ -14,10 +14,21 @@ class ConfigError(ValueError):
     """Raised when the configuration file is missing required or valid values."""
 
 
+# Raw segment file patterns the encrypt stage picks up. The recorder emits .mp4
+# for RTSP cameras and .ts for HTTP/MPEG-TS sources (e.g. an HDHomeRun tuner).
+RAW_SEGMENT_PATTERNS = ("*.mp4", "*.ts")
+
+
 @dataclass(frozen=True)
 class Camera:
     name: str
-    rtsp_url: str
+    url: str
+
+    @property
+    def scheme(self) -> str:
+        """Lowercased URL scheme, e.g. 'rtsp' or 'http'; '' if none."""
+        head, sep, _ = self.url.partition("://")
+        return head.lower() if sep else ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +46,7 @@ class Config:
     batch_interval_seconds: int = 300
     encrypt_interval_seconds: int = 20
     upload_transfers: int = 4
+    upload_tpslimit: int = 0
     use_trash: bool = False
 
     @property
@@ -80,15 +92,16 @@ def _parse_cameras(raw: Any) -> list[Camera]:
         if not isinstance(entry, dict):
             raise ConfigError(f"cameras[{i}] must be a mapping")
         name = entry.get("name")
-        url = entry.get("rtsp_url")
+        # 'url' is the general key; 'rtsp_url' is kept as a backward-compat alias.
+        url = entry.get("url") or entry.get("rtsp_url")
         if not name:
             raise ConfigError(f"cameras[{i}] missing 'name'")
         if not url:
-            raise ConfigError(f"camera {name!r} missing 'rtsp_url'")
+            raise ConfigError(f"camera {name!r} missing 'url'")
         if name in seen:
             raise ConfigError(f"duplicate camera name: {name!r}")
         seen.add(name)
-        cameras.append(Camera(name=str(name), rtsp_url=str(url)))
+        cameras.append(Camera(name=str(name), url=str(url)))
     return cameras
 
 
@@ -113,6 +126,7 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         batch_interval_seconds = int(data.get("batch_interval_seconds", 300))
         encrypt_interval_seconds = int(data.get("encrypt_interval_seconds", 20))
         upload_transfers = int(data.get("upload_transfers", 4))
+        upload_tpslimit = int(data.get("upload_tpslimit", 0))
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Numeric config value invalid: {exc}") from exc
 
@@ -128,6 +142,8 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         raise ConfigError("'encrypt_interval_seconds' must be positive")
     if upload_transfers <= 0:
         raise ConfigError("'upload_transfers' must be positive")
+    if upload_tpslimit < 0:
+        raise ConfigError("'upload_tpslimit' must be >= 0")
 
     use_trash = _as_bool(data.get("use_trash", False), "use_trash")
 
@@ -145,6 +161,7 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         batch_interval_seconds=batch_interval_seconds,
         encrypt_interval_seconds=encrypt_interval_seconds,
         upload_transfers=upload_transfers,
+        upload_tpslimit=upload_tpslimit,
         use_trash=use_trash,
     )
 

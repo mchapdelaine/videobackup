@@ -1,4 +1,8 @@
-"""Per-camera RTSP recorder: supervises an ffmpeg segment process per camera."""
+"""Per-source recorder: supervises an ffmpeg segment process per source.
+
+Handles RTSP cameras and HTTP/MPEG-TS sources (e.g. an HDHomeRun tuner);
+input flags and the segment container are chosen by the URL scheme.
+"""
 
 from __future__ import annotations
 
@@ -19,27 +23,53 @@ _BACKOFF_MIN = 2.0
 _BACKOFF_MAX = 60.0
 
 
+_HTTP_SCHEMES = ("http", "https")
+
+
 def _ffmpeg_cmd(camera: Camera, out_dir: Path, segment_seconds: int) -> list[str]:
-    """Build the ffmpeg command that segments a camera stream into mp4 files.
+    """Build the ffmpeg command that segments a source stream into files.
 
     Uses stream copy (-c copy) so there is no re-encode: low CPU, original
-    quality. The ``.tmp`` suffix on the pattern is renamed to ``.mp4`` by
-    ffmpeg only once a segment is fully written, which lets the encrypt stage
-    safely ignore the file currently being written.
+    quality. Input flags and container are chosen by URL scheme:
+
+    - ``rtsp://`` — TCP transport + connection timeout, muxed to ``.mp4``.
+    - ``http(s)://`` (e.g. HDHomeRun) — auto-reconnect on drop, muxed to
+      ``.ts`` (mpegts), which losslessly stream-copies broadcast codecs
+      (MPEG-2/H.264 video, AC-3 audio) that MP4 handles poorly.
+
+    Segments are written directly to their final extension; the encrypt stage
+    waits for the mtime to settle before touching a file, so a segment still
+    being written is never picked up.
     """
-    pattern = str(out_dir / f"{camera.name}_%Y%m%d_%H%M%S.mp4")
+    if camera.scheme in _HTTP_SCHEMES:
+        input_opts = [
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "5",
+        ]
+        segment_format, ext = "mpegts", "ts"
+    else:  # rtsp (and any other scheme) keeps the original RTSP path
+        input_opts = [
+            "-rtsp_transport",
+            "tcp",
+            "-timeout",
+            "10000000",  # microseconds; drop dead connections
+        ]
+        segment_format, ext = "mp4", "mp4"
+
+    pattern = str(out_dir / f"{camera.name}_%Y%m%d_%H%M%S.{ext}")
     return [
         "ffmpeg",
         "-nostdin",
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-rtsp_transport",
-        "tcp",
-        "-timeout",
-        "10000000",  # microseconds; drop dead connections
+        *input_opts,
         "-i",
-        camera.rtsp_url,
+        camera.url,
         "-c",
         "copy",
         "-f",
@@ -47,7 +77,7 @@ def _ffmpeg_cmd(camera: Camera, out_dir: Path, segment_seconds: int) -> list[str
         "-segment_time",
         str(segment_seconds),
         "-segment_format",
-        "mp4",
+        segment_format,
         "-reset_timestamps",
         "1",
         "-strftime",

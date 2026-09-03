@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/mchapdelaine/videobackup/actions/workflows/ci.yml/badge.svg)
 
-Unattended Linux tool that records RTSP camera footage, **GPG-encrypts** every clip, 
+Unattended Linux tool that records RTSP cameras and HTTP/MPEG-TS sources (e.g. an HDHomeRun tuner), **GPG-encrypts** every clip, 
 uploads it to a remote location via `rclone`, and enforces a **storage cap** by 
 pruning the oldest files first.
 
@@ -50,9 +50,16 @@ pip install -e .
 
 ## One-time setup
 
-### 1. Enable RTSP on each camera
-In UniFi Protect: **Camera → Settings → Advanced → RTSP**, enable a stream,
-and copy the `rtsp://<UDM-IP>:7447/<id>` URL. Repeat for all 3 cameras.
+### 1. Point each source at a stream URL
+Each `cameras[]` entry takes a `url`:
+- **RTSP cameras** (UniFi Protect / IP cams): **Camera → Settings → Advanced →
+  RTSP**, enable a stream, copy the `rtsp://<UDM-IP>:7447/<id>` URL. Recorded
+  as `.mp4`.
+- **HTTP/MPEG-TS sources** (e.g. an HDHomeRun tuner):
+  `http://<hdhr-ip>:5004/auto/v<channel>`. Recorded as `.ts`. The recorder
+  picks the right ffmpeg flags + container from the URL scheme automatically.
+
+(`rtsp_url` is still accepted as a legacy alias for `url`.)
 
 ### 2. Import your GPG public key
 Generate a keypair on a **trusted, offline** machine, export the public key,
@@ -160,7 +167,7 @@ See `config.yaml.example`. Key fields:
 
 | Field | Meaning |
 |---|---|
-| `cameras[]` | Name + RTSP URL per camera |
+| `cameras[]` | Name + `url` per source (`rtsp://` camera or `http(s)://` MPEG-TS, e.g. HDHomeRun); `rtsp_url` accepted as legacy alias |
 | `segment_seconds` | Length of each recorded file (default 300) |
 | `gpg_recipient` | Public key id/email footage is encrypted to |
 | `rclone_remote` / `drive_folder` | Google Drive destination |
@@ -170,8 +177,23 @@ See `config.yaml.example`. Key fields:
 | `use_trash` | `false` (default) deletes pruned files permanently; `true` sends them to Drive trash (still counts against quota) |
 | `local_spool` | Working dir for in-flight segments — use a real disk path, **not** `/tmp` (tmpfs/RAM) |
 | `encrypt_interval_seconds` | How often the encrypt loop drains plaintext (default 20; keep small) |
-| `upload_transfers` | Parallel rclone transfers per upload (default 4; try 8 on a fast uplink) |
+| `upload_transfers` | Parallel rclone transfers per upload (default 4; try 8 on a fast uplink, or 2 if you hit Drive API rate limits) |
+| `upload_tpslimit` | Optional cap on rclone API calls/sec (`--tpslimit`; 0 = unlimited). Set ~10 if you see `rateLimitExceeded` |
 | `batch_interval_seconds` | Prune cadence when idle (default 300); uploads are continuous, not gated by this |
+
+### Google Drive API rate limits
+
+If uploads stall with `403 … rateLimitExceeded (Queries per minute)`, you're
+hitting rclone's **built-in shared client_id** — one Google Cloud project whose
+per-minute API quota is shared across all rclone users. Client-side pacing
+(`upload_tpslimit`, fewer `upload_transfers`) reduces *your* load but can't fix
+a pool exhausted by others. The uploader already ships stall-resistance
+(`--timeout`/`--contimeout`/`--low-level-retries`) so a wedged transfer retries
+instead of hanging, but the real fix is **your own Drive API client_id** — free
+on any Google account, see rclone's
+[Making your own client_id](https://rclone.org/drive/#making-your-own-client-id).
+Set it via `rclone config` on the `gdrive` remote; you then get your own,
+unshared quota.
 
 ## How the pipeline runs
 

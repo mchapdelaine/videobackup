@@ -3,15 +3,21 @@
 
 udm_host: 192.168.1.1
 
-# One entry per camera. Get the RTSP(S) URL from UniFi Protect or camera settings:
-#   On Unifi Protect: Protect > Camera > Settings > Advanced > RTSP  (enable a stream, copy URL)
+# One entry per source. `url` accepts:
+#   - rtsp(s):// — UniFi Protect / IP cameras. On Protect: Camera > Settings >
+#     Advanced > RTSP (enable a stream, copy URL). Recorded as .mp4.
+#   - http(s):// — MPEG-TS sources such as an HDHomeRun tuner, e.g.
+#     http://<hdhr-ip>:5004/auto/v<channel>. Recorded as .ts (mpegts), which
+#     losslessly copies broadcast codecs (MPEG-2/H.264 + AC-3).
+# Input flags and container are chosen automatically by the URL scheme.
+# (`rtsp_url` is still accepted as a legacy alias for `url`.)
 cameras:
   - name: front_door
-    rtsp_url: rtsp://192.168.1.1:7447/aBcDeFgHiJkLmNoP
+    url: rtsp://192.168.1.1:7447/aBcDeFgHiJkLmNoP
   - name: driveway
-    rtsp_url: rtsp://192.168.1.1:7447/qRsTuVwXyZ012345
-  - name: backyard
-    rtsp_url: rtsp://192.168.1.1:7447/6789AbCdEfGhIjKl
+    url: rtsp://192.168.1.1:7447/qRsTuVwXyZ012345
+  - name: hdhomerun_cbc
+    url: http://192.168.1.50:5004/auto/v5.1
 
 # Length of each recorded file, in seconds.
 segment_seconds: 300
@@ -65,4 +71,12 @@ encrypt_interval_seconds: 20
 # Parallel rclone transfers per upload cycle. Higher = more throughput to
 # Google Drive (helps most when many small files are queued), at the cost of
 # more concurrent connections. 4 is a good default; try 8 on a fast uplink.
+# Lower it (2) if you hit Drive API rate limits during big catch-up bursts.
 upload_transfers: 4
+
+# Optional cap on rclone API calls/second (rclone --tpslimit). 0 = unlimited.
+# Set a small value (e.g. 10) if you see "rateLimitExceeded (Queries per
+# minute)" errors. Note: rclone's *default* shared client_id has a global
+# quota shared across all rclone users, so pacing only helps so much -- the
+# real fix is your own Google Drive API client_id (see README / rclone docs).
+upload_tpslimit: 0

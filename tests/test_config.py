@@ -31,8 +31,33 @@ def test_valid_config(tmp_path):
     assert cfg.cameras[0].name == "front"
     assert cfg.max_drive_bytes == 107374182400
     assert cfg.segment_seconds == 300  # default
+    assert cfg.min_free_bytes == 0  # default (quota guard off)
     assert cfg.remote_path == "gdrive:unifi-backup"
     assert cfg.spool_raw.name == "raw"
+
+
+def test_rtsp_url_is_accepted_as_alias(tmp_path):
+    # VALID uses the legacy 'rtsp_url' key; it must still populate .url.
+    cfg = load_config(_write(tmp_path, VALID))
+    assert cfg.cameras[0].url == "rtsp://192.168.1.1:7447/aaa"
+    assert cfg.cameras[0].scheme == "rtsp"
+
+
+def test_generic_url_key_and_http_scheme(tmp_path):
+    text = VALID.replace(
+        "  - name: back\n    rtsp_url: rtsp://192.168.1.1:7447/bbb",
+        "  - name: hdhr\n    url: http://192.168.1.50:5004/auto/v5.1",
+    )
+    cfg = load_config(_write(tmp_path, text))
+    assert cfg.cameras[1].name == "hdhr"
+    assert cfg.cameras[1].url == "http://192.168.1.50:5004/auto/v5.1"
+    assert cfg.cameras[1].scheme == "http"
+
+
+def test_missing_url_and_alias_errors(tmp_path):
+    text = VALID.replace("    rtsp_url: rtsp://192.168.1.1:7447/aaa\n", "")
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, text))
 
 
 def test_missing_file(tmp_path):
