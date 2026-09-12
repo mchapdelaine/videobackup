@@ -15,8 +15,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
-from .config import Config
+from .config import RAW_SEGMENT_PATTERNS, Config
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,21 @@ def select_for_deletion(
     return to_delete
 
 
+def select_oversize(files: list[RemoteFile], max_bytes: int) -> list[RemoteFile]:
+    """Return files too large to ever be stored under ``max_bytes``.
+
+    A single file bigger than the whole folder cap cannot be uploaded even into
+    an empty folder, and rclone cannot split one file across cycles. Such a file
+    is undeliverable by construction: every cycle re-attempts it, fails with
+    403 storageQuotaExceeded, and the queue behind it never drains.
+
+    Pure (no filesystem) so it can be unit-tested.
+    """
+    if max_bytes <= 0:
+        return []
+    return [f for f in files if f.size > max_bytes]
+
+
 def effective_prune_cap(
     max_drive_bytes: int,
     reserve_bytes: int,
@@ -92,6 +108,124 @@ def effective_prune_cap(
         if deficit > 0:
             cap = min(cap, max(0, folder_total - deficit))
     return cap
+
+
+def _scan_dir(directory: Path, patterns: tuple[str, ...]) -> list[RemoteFile]:
+    """List a spool directory as RemoteFiles, skipping entries that vanish."""
+    files: list[RemoteFile] = []
+    for pattern in patterns:
+        for path in directory.glob(pattern):
+            try:
+                st = path.stat()
+            except OSError:  # vanished mid-listing (uploader moved it)
+                continue
+            files.append(
+                RemoteFile(
+                    name=path.name,
+                    size=st.st_size,
+                    mod_time=datetime.fromtimestamp(st.st_mtime, timezone.utc),
+                )
+            )
+    return files
+
+
+def _unlink_all(directory: Path, victims: list[RemoteFile]) -> tuple[int, int]:
+    """Delete ``victims`` from ``directory``. Returns ``(count, bytes_freed)``."""
+    deleted = 0
+    freed = 0
+    for victim in victims:
+        try:
+            (directory / victim.name).unlink()
+        except OSError as exc:  # already gone, or permissions
+            log.warning("Could not drop spooled %s: %s", victim.name, exc)
+            continue
+        deleted += 1
+        freed += victim.size
+    return deleted, freed
+
+
+def _drop_oversize(directory: Path, files: list[RemoteFile], config: Config) -> int:
+    """Delete segments larger than the whole Drive cap. Returns count deleted.
+
+    Not gated on ``max_spool_bytes``: this is a correctness guard, not a
+    capacity policy. Keeping such a file cannot preserve it — it can never be
+    uploaded — it only wedges every later cycle behind a permanent 403.
+    """
+    oversize = select_oversize(files, config.max_drive_bytes)
+    if not oversize:
+        return 0
+    deleted, freed = _unlink_all(directory, oversize)
+    if deleted:
+        log.error(
+            "Dropped %d undeliverable segment(s), %.2f GiB, from %s: each is "
+            "larger than the entire Drive cap (%.2f GiB) and could never be "
+            "uploaded. A segment this size means ffmpeg failed to roll over — "
+            "check the recorder log for corrupt-packet warnings.",
+            deleted,
+            freed / 2**30,
+            directory,
+            config.max_drive_bytes / 2**30,
+        )
+    return deleted
+
+
+def prune_spool(config: Config) -> int:
+    """Bound the local encrypted spool. Returns the count deleted.
+
+    Two passes. First drops segments too big to ever upload (see
+    :func:`_drop_oversize`) — always on, since they are pure blockage. Then
+    caps the remaining backlog oldest-first: uploads run newest-first, so
+    segments a slow or broken uplink never reaches would otherwise sit here
+    forever and fill the disk. Nothing else bounds this directory — files leave
+    it only when rclone confirms an upload.
+
+    The backlog pass is size-only (no age pass): the byte cap always bites long
+    before any sane age cap would, and ``max_age_days`` is about the Drive
+    archive, not local scratch. It is disabled when ``max_spool_bytes`` is 0, so
+    a healthy backlog is never touched unless explicitly capped.
+    """
+    spool = config.spool_encrypted
+    files = _scan_dir(spool, ("*.gpg",))
+
+    deleted = _drop_oversize(spool, files, config)
+    if deleted:
+        dropped = {f.name for f in select_oversize(files, config.max_drive_bytes)}
+        files = [f for f in files if f.name not in dropped]
+
+    if config.max_spool_bytes <= 0:
+        return deleted
+
+    victims = select_for_deletion(
+        files, config.max_spool_bytes, datetime.now(timezone.utc)
+    )
+    dropped_n, freed = _unlink_all(spool, victims)
+    if dropped_n:
+        log.warning(
+            "Spool over cap: dropped %d unuploaded segment(s), %.2f GiB "
+            "(cap %.2f GiB) — uplink is not keeping up with recording",
+            dropped_n,
+            freed / 2**30,
+            config.max_spool_bytes / 2**30,
+        )
+    return deleted + dropped_n
+
+
+def prune_raw_spool(config: Config) -> int:
+    """Drop raw segments too big to ever upload. Returns the count deleted.
+
+    Oversize only — no backlog cap. Raw files are transient (encrypt deletes
+    each one on success), so a growing raw spool means encryption is failing,
+    and deleting footage that would still have been deliverable is the wrong
+    answer to that. A single oversize segment is different: it is unusable
+    whatever happens downstream, and it would cost a second copy of itself in
+    the encrypted spool on top of the space it already holds.
+
+    Note this only reclaims space once ffmpeg has *closed* the file. Unlinking a
+    file ffmpeg still holds open frees no blocks; the recorder's stall watchdog
+    is what ends that case.
+    """
+    raw = config.spool_raw
+    return _drop_oversize(raw, _scan_dir(raw, RAW_SEGMENT_PATTERNS), config)
 
 
 def _run_rclone(args: list[str]) -> subprocess.CompletedProcess[str]:

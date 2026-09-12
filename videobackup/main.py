@@ -11,7 +11,7 @@ import threading
 from .config import Config, ConfigError, ensure_spool_dirs, load_config
 from .encrypt import encrypt_pending
 from .recorder import Recorder
-from .retention import prune
+from .retention import prune, prune_raw_spool, prune_spool
 from .uploader import upload_pending
 
 log = logging.getLogger("videobackup")
@@ -27,14 +27,17 @@ def _setup_logging(verbose: bool) -> None:
 def run_batch(config: Config) -> None:
     """One encrypt -> upload -> prune cycle."""
     ensure_spool_dirs(config)
+    dropped = prune_raw_spool(config)  # before encrypt: never spend CPU on it
     encrypted = encrypt_pending(config)
+    dropped += prune_spool(config)
     uploaded = upload_pending(config)
     deleted = prune(config)
     log.info(
-        "Batch done: encrypted=%d uploaded=%d pruned=%d",
+        "Batch done: encrypted=%d uploaded=%d pruned=%d spool_dropped=%d",
         encrypted,
         uploaded,
         deleted,
+        dropped,
     )
 
 
@@ -65,6 +68,9 @@ def run_encrypt_loop(config: Config, stop: threading.Event) -> None:
     ensure_spool_dirs(config)
     while not stop.is_set():
         try:
+            # Drop undeliverable segments before encrypting them: doing it here
+            # saves the CPU and the second, encrypted copy of the same bytes.
+            prune_raw_spool(config)
             encrypt_pending(config)
         except Exception:
             log.exception("Encrypt cycle failed; will retry")
@@ -90,10 +96,12 @@ def run_upload_loop(config: Config, stop: threading.Event) -> None:
 
     Runs independently of encryption so a slow Drive upload never blocks
     plaintext from being encrypted and removed. When files are queued it prunes
-    the remote down to ``max_drive_bytes`` minus the bytes about to be uploaded
-    (a pre-upload gate, so the upload lands at/under the cap instead of
-    overshooting), then uploads back-to-back until drained. When idle it polls,
-    and periodically prunes to enforce the age cap even without new uploads.
+    the remote down to ``max_drive_bytes`` minus the bytes this cycle will
+    upload (a pre-upload gate, so the upload lands at/under the cap instead of
+    overshooting), then uploads one bounded slice. Prune and upload share this
+    thread, so the upload must stay bounded or retention never runs. When idle
+    it polls, and periodically prunes to enforce the age cap even without new
+    uploads.
     """
     import time
 
@@ -101,9 +109,17 @@ def run_upload_loop(config: Config, stop: threading.Event) -> None:
     while not stop.is_set():
         moved = 0
         try:
+            # Bound the spool first: dropping segments the uplink will never
+            # reach keeps `pending` honest and the disk from filling.
+            prune_spool(config)
             pending = _pending_upload_bytes(config)
             if pending > 0:
-                prune(config, reserve_bytes=pending)  # gate: free room first
+                # Reserve only what this cycle can actually upload. Reserving
+                # the whole backlog would drive the prune cap to zero whenever
+                # the spool exceeds max_drive_bytes, flushing the entire remote
+                # folder before every upload.
+                reserve = min(pending, config.upload_slice_bytes)
+                prune(config, reserve_bytes=reserve)  # gate: free room first
                 last_prune = time.monotonic()
                 moved = upload_pending(config)
             elif time.monotonic() - last_prune >= config.batch_interval_seconds:

@@ -106,3 +106,39 @@ def test_use_trash_parsed(tmp_path):
 def test_use_trash_invalid_rejected(tmp_path):
     with pytest.raises(ConfigError):
         load_config(_write(tmp_path, VALID + "use_trash: maybe\n"))
+
+
+def test_upload_slice_defaults_to_quarter_cap(tmp_path):
+    cfg = load_config(_write(tmp_path, VALID))
+    assert cfg.upload_slice_bytes == cfg.max_drive_bytes // 4
+
+
+def test_upload_slice_explicit_override(tmp_path):
+    cfg = load_config(_write(tmp_path, VALID + "upload_max_bytes: 1048576\n"))
+    assert cfg.upload_slice_bytes == 1048576
+
+
+def test_upload_slice_never_zero(tmp_path):
+    # A tiny cap must still leave a non-zero slice, or uploads would stall.
+    cfg = load_config(_write(tmp_path, VALID + "max_drive_bytes: 3\n"))
+    assert cfg.upload_slice_bytes >= 1
+
+
+def test_negative_upload_max_bytes_rejected(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, VALID + "upload_max_bytes: -1\n"))
+
+
+def test_max_spool_bytes_defaults_off(tmp_path):
+    # Must default to 0: never delete local data unless asked to.
+    assert load_config(_write(tmp_path, VALID)).max_spool_bytes == 0
+
+
+def test_max_spool_bytes_parsed(tmp_path):
+    cfg = load_config(_write(tmp_path, VALID + "max_spool_bytes: 21474836480\n"))
+    assert cfg.max_spool_bytes == 21474836480
+
+
+def test_negative_max_spool_bytes_rejected(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, VALID + "max_spool_bytes: -1\n"))

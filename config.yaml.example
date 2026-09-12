@@ -32,6 +32,12 @@ rclone_remote: "gdrive"
 drive_folder: "unifi-backup"
 
 # Storage cap on Google Drive. When exceeded, oldest files are deleted first.
+# Also doubles as a sanity ceiling on a single segment: rclone cannot split one
+# file across upload cycles, so a segment larger than this whole cap could never
+# be uploaded even into an empty folder. Such a file is deleted from the spool
+# instead of being retried forever (which used to wedge the queue behind a
+# permanent 403 while the local disk filled). Normal segments are orders of
+# magnitude smaller, so this only fires when ffmpeg fails to roll over.
 # 107374182400 = 100 GiB
 max_drive_bytes: 107374182400
 
@@ -80,3 +86,22 @@ upload_transfers: 4
 # quota shared across all rclone users, so pacing only helps so much -- the
 # real fix is your own Google Drive API client_id (see README / rclone docs).
 upload_tpslimit: 0
+
+# Bytes a single upload cycle may transfer before it returns (rclone
+# --max-transfer, soft cutoff). Upload and prune share one thread, so an
+# unbounded upload starves retention: with a spool larger than the remote cap,
+# one rclone process runs for hours, the folder overruns max_drive_bytes, the
+# account quota fills, and every transfer starts failing with 403. This also
+# bounds the pre-upload reserve, keeping the remote folder a rolling window
+# instead of being flushed before each upload.
+# 0 = auto (max_drive_bytes / 4). Lower it to prune more often.
+upload_max_bytes: 0
+
+# Ceiling on the local encrypted spool, oldest dropped first. Nothing else
+# bounds that directory -- files leave it only when rclone confirms an upload,
+# and uploads run newest-first, so segments a slow or broken uplink never
+# drains would otherwise accumulate until the disk is full.
+# A buffer much larger than max_drive_bytes is dead weight: Drive only ever
+# retains max_drive_bytes anyway, so a few multiples of it is plenty.
+# 0 = off (never delete local data). Example: 21474836480 = 20 GiB.
+max_spool_bytes: 0

@@ -47,7 +47,26 @@ class Config:
     encrypt_interval_seconds: int = 20
     upload_transfers: int = 4
     upload_tpslimit: int = 0
+    upload_max_bytes: int = 0
+    max_spool_bytes: int = 0
     use_trash: bool = False
+
+    @property
+    def upload_slice_bytes(self) -> int:
+        """Bytes a single upload cycle may transfer before returning.
+
+        Bounds one ``rclone move`` so it always finishes and lets prune run
+        again. Without a bound, a spool larger than the remote cap keeps one
+        rclone process alive indefinitely and retention never executes, so the
+        folder overruns ``max_drive_bytes`` and the account quota fills.
+
+        It also bounds the pre-upload reserve: reserving the whole backlog
+        would drive the prune cap to zero and flush the remote folder every
+        cycle. A quarter of the cap keeps the folder a rolling window.
+        """
+        if self.upload_max_bytes > 0:
+            return self.upload_max_bytes
+        return max(1, self.max_drive_bytes // 4)
 
     @property
     def spool_raw(self) -> Path:
@@ -127,6 +146,8 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         encrypt_interval_seconds = int(data.get("encrypt_interval_seconds", 20))
         upload_transfers = int(data.get("upload_transfers", 4))
         upload_tpslimit = int(data.get("upload_tpslimit", 0))
+        upload_max_bytes = int(data.get("upload_max_bytes", 0))
+        max_spool_bytes = int(data.get("max_spool_bytes", 0))
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Numeric config value invalid: {exc}") from exc
 
@@ -144,6 +165,10 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         raise ConfigError("'upload_transfers' must be positive")
     if upload_tpslimit < 0:
         raise ConfigError("'upload_tpslimit' must be >= 0")
+    if upload_max_bytes < 0:
+        raise ConfigError("'upload_max_bytes' must be >= 0")
+    if max_spool_bytes < 0:
+        raise ConfigError("'max_spool_bytes' must be >= 0")
 
     use_trash = _as_bool(data.get("use_trash", False), "use_trash")
 
@@ -162,6 +187,8 @@ def load_config(path: str | os.PathLike[str]) -> Config:
         encrypt_interval_seconds=encrypt_interval_seconds,
         upload_transfers=upload_transfers,
         upload_tpslimit=upload_tpslimit,
+        upload_max_bytes=upload_max_bytes,
+        max_spool_bytes=max_spool_bytes,
         use_trash=use_trash,
     )
 

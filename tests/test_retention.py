@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,10 @@ from videobackup.retention import (
     _parse_mod_time,
     _rclone_delete_args,
     effective_prune_cap,
+    prune_raw_spool,
+    prune_spool,
     select_for_deletion,
+    select_oversize,
 )
 
 GiB = 2**30
@@ -214,3 +218,112 @@ def test_delete_remote_noop_on_empty(monkeypatch):
     monkeypatch.setattr(retention, "_run_rclone", fake_run)
     assert _delete_remote(_cfg(), []) == 0
     assert not called  # no rclone process for an empty victim list
+
+
+# -- prune_spool (local encrypted spool ceiling) --------------------------
+
+
+def _spool(tmp_path, sizes_by_age, max_spool_bytes, max_drive_bytes=10**9):
+    """Build a spool dir; sizes_by_age is oldest-first. Returns a fake config."""
+    enc = tmp_path / "encrypted"
+    enc.mkdir()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for i, size in enumerate(sizes_by_age):
+        p = enc / f"cam_{i:03d}.mp4.gpg"
+        p.write_bytes(b"x" * size)
+        os.utime(p, (1_000_000 + i, 1_000_000 + i))  # ascending mtime
+    return SimpleNamespace(
+        spool_encrypted=enc,
+        spool_raw=raw,
+        max_spool_bytes=max_spool_bytes,
+        max_drive_bytes=max_drive_bytes,
+    )
+
+
+def test_prune_spool_drops_oldest_over_cap(tmp_path):
+    cfg = _spool(tmp_path, [100, 100, 100, 100], max_spool_bytes=250)
+    assert prune_spool(cfg) == 2
+    left = sorted(p.name for p in cfg.spool_encrypted.glob("*.gpg"))
+    assert left == ["cam_002.mp4.gpg", "cam_003.mp4.gpg"]  # newest survive
+
+
+def test_prune_spool_noop_under_cap(tmp_path):
+    cfg = _spool(tmp_path, [100, 100], max_spool_bytes=10_000)
+    assert prune_spool(cfg) == 0
+    assert len(list(cfg.spool_encrypted.glob("*.gpg"))) == 2
+
+
+def test_prune_spool_disabled_by_default(tmp_path):
+    # 0 must never delete local data, however far over any notional cap.
+    cfg = _spool(tmp_path, [100] * 5, max_spool_bytes=0)
+    assert prune_spool(cfg) == 0
+    assert len(list(cfg.spool_encrypted.glob("*.gpg"))) == 5
+
+
+def test_prune_spool_ignores_partial_files(tmp_path):
+    cfg = _spool(tmp_path, [100, 100], max_spool_bytes=150)
+    part = cfg.spool_encrypted / "cam_999.mp4.gpg.part"
+    part.write_bytes(b"y" * 5_000)  # in-progress encrypt, must survive
+    assert prune_spool(cfg) == 1
+    assert part.exists()
+
+
+# -- oversize segments (undeliverable by construction) --------------------
+
+
+def test_select_oversize_picks_only_files_over_the_cap():
+    files = [_f("ok", 100, 1), _f("huge", 101, 2), _f("exact", 100, 3)]
+    assert [f.name for f in select_oversize(files, max_bytes=100)] == ["huge"]
+
+
+def test_select_oversize_disabled_when_cap_is_zero():
+    assert select_oversize([_f("huge", 10**9, 1)], max_bytes=0) == []
+
+
+def test_prune_spool_drops_file_bigger_than_drive_cap(tmp_path):
+    # The live failure: one 10 GiB segment against a 5 GiB cap. rclone cannot
+    # split a single file, so every cycle re-attempted it and 403'd forever.
+    cfg = _spool(tmp_path, [100, 100], max_spool_bytes=0, max_drive_bytes=1_000)
+    huge = cfg.spool_encrypted / "cbc_20260912_080716.ts.gpg"
+    huge.write_bytes(b"z" * 5_000)
+    assert prune_spool(cfg) == 1
+    assert not huge.exists()
+    assert len(list(cfg.spool_encrypted.glob("*.gpg"))) == 2  # others untouched
+
+
+def test_prune_spool_drops_oversize_even_though_it_is_newest(tmp_path):
+    # Regression: the backlog pass keeps newest-first, and a still-growing
+    # monster always has the newest mtime -- so it survived while good segments
+    # were deleted around it. The oversize pass must run first.
+    cfg = _spool(tmp_path, [100, 100], max_spool_bytes=10_000, max_drive_bytes=1_000)
+    huge = cfg.spool_encrypted / "cbc_20260912_080716.ts.gpg"
+    huge.write_bytes(b"z" * 5_000)
+    os.utime(huge, (2_000_000, 2_000_000))  # newest of all
+    assert prune_spool(cfg) == 1
+    assert not huge.exists()
+    assert sorted(p.name for p in cfg.spool_encrypted.glob("*.gpg")) == [
+        "cam_000.mp4.gpg",
+        "cam_001.mp4.gpg",
+    ]
+
+
+def test_prune_raw_spool_drops_oversize_only(tmp_path):
+    cfg = _spool(tmp_path, [], max_spool_bytes=0, max_drive_bytes=1_000)
+    huge = cfg.spool_raw / "cbc_20260912_080716.ts"
+    huge.write_bytes(b"z" * 5_000)
+    small = cfg.spool_raw / "front_20260912_080716.mp4"
+    small.write_bytes(b"z" * 100)
+    assert prune_raw_spool(cfg) == 1
+    assert not huge.exists()
+    assert small.exists()
+
+
+def test_prune_raw_spool_never_applies_a_backlog_cap(tmp_path):
+    # Raw drains via encrypt; a backlog there means encryption is failing, and
+    # deleting still-deliverable footage is the wrong response to that.
+    cfg = _spool(tmp_path, [], max_spool_bytes=1, max_drive_bytes=10**9)
+    for i in range(5):
+        (cfg.spool_raw / f"front_{i}.mp4").write_bytes(b"z" * 1_000)
+    assert prune_raw_spool(cfg) == 0
+    assert len(list(cfg.spool_raw.glob("*.mp4"))) == 5
