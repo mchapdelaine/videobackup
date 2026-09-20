@@ -10,11 +10,24 @@ import threading
 
 from .config import Config, ConfigError, ensure_spool_dirs, load_config
 from .encrypt import encrypt_pending
+from .rclone import RcloneAuthError
 from .recorder import Recorder
 from .retention import prune, prune_raw_spool, prune_spool
 from .uploader import upload_pending
 
 log = logging.getLogger("videobackup")
+
+# How long to wait after the OAuth grant dies. Only a human at a browser can
+# fix it, so retrying on the normal interval accomplishes nothing but burying
+# the one log line that says what to do. Recording and encryption keep running
+# throughout; the spool cap is what bounds the backlog until uploads resume.
+_AUTH_RETRY_SECONDS = 300
+
+# Exit codes. Separate from the generic failure code so a supervisor (or a
+# human reading `systemctl status`) can tell "needs reauthorization" apart from
+# "crashed".
+EXIT_CONFIG = 2
+EXIT_AUTH = 3
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -53,6 +66,10 @@ def run_batch_loop(config: Config, stop: threading.Event | None = None) -> None:
     while not stop.is_set():
         try:
             run_batch(config)
+        except RcloneAuthError as exc:
+            log.error("%s Retrying in %ds.", exc, _AUTH_RETRY_SECONDS)
+            stop.wait(_AUTH_RETRY_SECONDS)
+            continue
         except Exception:  # keep the loop alive across transient failures
             log.exception("Batch cycle failed; will retry")
         stop.wait(config.batch_interval_seconds)
@@ -125,6 +142,12 @@ def run_upload_loop(config: Config, stop: threading.Event) -> None:
             elif time.monotonic() - last_prune >= config.batch_interval_seconds:
                 prune(config)  # idle: still enforce age/size caps
                 last_prune = time.monotonic()
+        except RcloneAuthError as exc:
+            # Not transient and not our bug, so no traceback: just the one
+            # sentence that says how to fix it, then a long wait.
+            log.error("%s Retrying in %ds.", exc, _AUTH_RETRY_SECONDS)
+            stop.wait(_AUTH_RETRY_SECONDS)
+            continue
         except Exception:
             log.exception("Upload/prune cycle failed; will retry")
         if moved > 0 and not stop.is_set():
@@ -190,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
     except ConfigError as exc:
         log.error("Config error: %s", exc)
-        return 2
+        return EXIT_CONFIG
 
     if args.command == "check":
         log.info(
@@ -200,16 +223,23 @@ def main(argv: list[str] | None = None) -> int:
             config.remote_path,
         )
         return 0
-    if args.command == "record":
-        Recorder(config).run_forever()
-    elif args.command == "batch":
-        run_batch(config)
-    elif args.command == "batch-loop":
-        run_batch_loop(config)
-    elif args.command == "prune":
-        prune(config)
-    elif args.command == "run":
-        run_all(config)
+    # The long-running commands handle a dead grant themselves (log and back
+    # off); the one-shot ones surface it here, as a message rather than a
+    # traceback, since nothing about it is a crash.
+    try:
+        if args.command == "record":
+            Recorder(config).run_forever()
+        elif args.command == "batch":
+            run_batch(config)
+        elif args.command == "batch-loop":
+            run_batch_loop(config)
+        elif args.command == "prune":
+            prune(config)
+        elif args.command == "run":
+            run_all(config)
+    except RcloneAuthError as exc:
+        log.error("%s", exc)
+        return EXIT_AUTH
     return 0
 
 

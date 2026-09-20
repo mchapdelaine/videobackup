@@ -10,14 +10,13 @@ succeeds, so files leave the local disk as early as possible.
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import NamedTuple
 
 from .config import Config
+from .rclone import RcloneAuthError, auth_hint, classify
 
 log = logging.getLogger(__name__)
 
@@ -85,57 +84,12 @@ def _rclone_move_args(config: Config) -> list[str]:
 # the cycle did its bounded share and the rest goes on the next pass.
 _RC_MAX_TRANSFER = 8
 
-# "Errors:  3 (retrying may help)" in rclone's final stats block.
-_ERRORS_RE = re.compile(r"^Errors:\s+(\d+)", re.MULTILINE)
-
-# Drive 403s that mean "slow down", as opposed to "out of space". These are
-# survivable -- rclone backs off and retries -- so they never reach the exit
-# code, yet they can silently discard most of a cycle's transferred bytes.
-_RATE_LIMIT_MARKERS = (
-    "ratelimitexceeded",
-    "userratelimitexceeded",
-    "quota metric",
-    "quota exceeded",
-)
-
-# Drive's *other* 403: the account is full. Same status code as throttling but
-# the opposite remedy -- retrying never helps, something has to be deleted.
-_OUT_OF_SPACE_MARKERS = (
-    "storagequotaexceeded",
-    "storage quota has been exceeded",
-)
-
 _CLIENT_ID_HINT = (
     "If this persists, the rclone remote is probably using rclone's shared "
     "default client_id, whose API quota is consumed by all rclone users at "
     "once. Create your own Drive API client_id: "
     "https://rclone.org/drive/#making-your-own-client-id"
 )
-
-
-class RcloneOutcome(NamedTuple):
-    errors: int
-    rate_limited: bool
-    out_of_space: bool
-
-
-def _summarize_rclone(stderr: str) -> RcloneOutcome:
-    """Parse rclone's stderr into the signals worth acting on (pure).
-
-    ``errors`` comes from the final stats block. ``rate_limited`` is true when
-    any 403-style throttling appeared, whether or not it was fatal.
-    ``out_of_space`` is the distinct 403 that means the Drive account is full;
-    it is deliberately not folded into ``rate_limited`` because the two call for
-    opposite responses -- back off versus free space.
-    """
-    match = _ERRORS_RE.search(stderr)
-    errors = int(match.group(1)) if match else 0
-    low = stderr.lower()
-    return RcloneOutcome(
-        errors=errors,
-        rate_limited=any(marker in low for marker in _RATE_LIMIT_MARKERS),
-        out_of_space=any(marker in low for marker in _OUT_OF_SPACE_MARKERS),
-    )
 
 
 def upload_pending(config: Config) -> int:
@@ -190,7 +144,11 @@ def upload_pending(config: Config) -> int:
     moved = len(moved_names)
     moved_bytes = sum(sizes[name] for name in moved_names)
 
-    outcome = _summarize_rclone(result.stderr)
+    outcome = classify(result.stderr)
+    if outcome.auth_expired:
+        # Raise rather than log-and-continue: every later cycle would fail the
+        # same way, and the loop needs to back off instead of hammering.
+        raise RcloneAuthError(auth_hint(config.rclone_remote))
     log.info(
         "Upload cycle: %d/%d file(s), %.2f GiB in %.0fs (%.0f MB/min), "
         "%d rclone error(s)",

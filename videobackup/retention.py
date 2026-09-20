@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import RAW_SEGMENT_PATTERNS, Config
+from .rclone import RcloneAuthError, auth_hint, classify
 
 log = logging.getLogger(__name__)
 
@@ -297,6 +298,11 @@ def _parse_mod_time(value: str) -> datetime:
 def list_remote(config: Config) -> list[RemoteFile]:
     result = _run_rclone(["lsjson", "--files-only", config.remote_path])
     if result.returncode != 0:
+        # A dead OAuth grant surfaces here first: listing the folder is the
+        # first thing every cycle does. Name it, so the loop can back off
+        # rather than retrying an unrecoverable failure every few seconds.
+        if classify(result.stderr).auth_expired:
+            raise RcloneAuthError(auth_hint(config.rclone_remote))
         raise RuntimeError(f"rclone lsjson failed: {result.stderr.strip()}")
     entries = json.loads(result.stdout or "[]")
     files: list[RemoteFile] = []
