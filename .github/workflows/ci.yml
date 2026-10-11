@@ -36,6 +36,13 @@ jobs:
         uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
+          # Both matrix legs would otherwise compute the same cache key: the
+          # key embeds the Python setup-uv itself resolved (the runner's
+          # system 3.12.3), not the matrix value, which is installed a step
+          # later. Identical keys mean the legs race to reserve the cache --
+          # one wins, the other warns -- and the loser then restores a cache
+          # built for the other interpreter. The suffix gives each leg its own.
+          cache-suffix: ${{ matrix.python-version }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
