@@ -4,6 +4,15 @@ on:
   push:
   pull_request:
 
+# Least privilege for GITHUB_TOKEN. This workflow only reads the repo to test
+# it -- it opens no issues, pushes no commits, posts no comments. Without an
+# explicit block the repository default applies, which is read-write on repos
+# created before February 2023, so a compromised dependency in the test run
+# would inherit a token that can push. Declared at workflow level so any job
+# added later starts restricted rather than silently getting the default.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
