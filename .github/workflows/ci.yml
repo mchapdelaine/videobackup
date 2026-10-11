@@ -26,10 +26,14 @@ jobs:
         python-version: ["3.9", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
+      # Pinned to an exact version on purpose: setup-uv stopped publishing
+      # floating major/minor tags at v8 (deliberately, as supply-chain
+      # hardening -- their releases are immutable instead). "@v10" does not
+      # resolve and will fail the run; bump this by editing the version.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
 
